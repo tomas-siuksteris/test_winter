@@ -50,8 +50,9 @@ RUN nvm install v16.17.0
 COPY ../../../src/ /var/www/
 
 RUN apt-get update && apt-get install -y cron
-RUN echo "* * * * * root php /var/www/artisan schedule:run >> /var/log/cron.log 2>&1" >> /etc/crontab
-RUN touch /var/log/cron.log
+
+RUN composer install
 RUN chown -R www-data:www-data /var/www/
 
-CMD bash -c "cron && php-fpm"
+
+CMD bash -c "php-fpm"
