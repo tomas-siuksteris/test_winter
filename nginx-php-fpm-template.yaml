@@ -1,0 +1,377 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: nginx-php-fpm
+parameters:
+  - name: APP_NAME
+    value: "nginx-php-fpm"
+    required: true
+  - name: NGINX_IMAGE
+    description: "Image for nginx- (and init-) container"
+    value: "nginx:stable"
+    required: true   
+  - name: PHP_FPM_IMAGE
+    description: "Source image for php-fpm build"
+    value: "php:8.2-fpm"
+    required: true   
+  - name: WEBROOT_SIZE
+    value: "512Mi"
+    required: true
+objects:
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}
+    labels:
+      app: ${APP_NAME}
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}
+    strategy:
+      type: Rolling
+    template:
+      metadata:
+        labels:
+          app: ${APP_NAME}
+        name: ${APP_NAME}
+      spec:
+        initContainers:
+        - name: ${APP_NAME}-init-container
+          image: ${NGINX_IMAGE}
+          command: ['sh', '-c', 'mkdir -p /var/www/html']
+          volumeMounts:
+          - mountPath: /var/www
+            name: webroot
+        containers:
+        - image: ${NGINX_IMAGE}
+          imagePullPolicy: Always
+          name: nginx
+          ports:
+          - name: http
+            containerPort: 8080
+            protocol: TCP
+          volumeMounts:
+          - mountPath: /etc/nginx
+            name: nginx-config
+          - mountPath: /var/cache/nginx
+            name: nginx-cache
+          - mountPath: /var/www
+            name: webroot
+          restartPolicy: Always
+        - image: php-fpm
+          imagePullPolicy: Always
+          name: php-fpm
+          env:
+          - name: HOME
+            value: /var/www
+          restartPolicy: Always
+          volumeMounts:
+          - mountPath: /var/www
+            name: webroot
+        volumes:
+        - name: nginx-config
+          configMap:
+            name: ${APP_NAME}-nginx-config
+        - name: nginx-cache
+          emptyDir: {}
+        - name: webroot
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}-webroot
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - php-fpm
+        from:
+          kind: ImageStreamTag
+          name: ${APP_NAME}-php-fpm:latest
+      type: ImageChange
+    - type: ConfigChange    
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    labels:
+      app: ${APP_NAME}
+      build: ${APP_NAME}-php-fpm-build
+    name: ${APP_NAME}-php-fpm-build
+  spec:
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${APP_NAME}-php-fpm:latest
+    source:
+      dockerfile: |
+        FROM php:8.2-fpm
+
+        WORKDIR /var/www
+
+        USER root
+
+        RUN apt-get update && apt-get install -y \
+            build-essential \
+            curl \
+            git \
+            jpegoptim optipng pngquant gifsicle \
+            locales \
+            unzip \
+            vim \
+            zip
+
+        # Clear cache
+        RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+
+        # Install PHP extensions
+
+        # Graphics Draw
+        RUN apt-get update && apt-get install -y \
+            libfreetype6-dev \
+            libjpeg62-turbo-dev \
+            libpng-dev \
+            libzip-dev \
+            && docker-php-ext-configure gd --with-freetype --with-jpeg \
+            && docker-php-ext-install -j$(nproc) gd
+
+        RUN pecl install redis-6.0.2 && docker-php-ext-enable redis
+        # Multibyte String
+        RUN apt-get update && apt-get install -y libonig-dev && docker-php-ext-install mbstring
+
+        # Miscellaneous
+        RUN docker-php-ext-install bcmath
+        RUN docker-php-ext-install exif
+        RUN docker-php-ext-install pdo_mysql
+        RUN docker-php-ext-install zip
+
+        # Install Composer
+        RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+        # Install specific version of Node.js with npm through nvm
+        SHELL ["/bin/bash", "--login", "-c"]
+        RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.1/install.sh | bash
+        RUN nvm install v16.17.0
+
+        # Install Cron
+        COPY ../../../src/ /var/www/
+
+        RUN apt-get update && apt-get install -y cron
+
+        RUN composer install
+        RUN chown -R www-data:www-data /var/www/
+
+
+        CMD bash -c "php-fpm"
+      type: Dockerfile
+    strategy:
+      dockerStrategy:
+        from:
+          kind: DockerImage
+          name: ${PHP_FPM_IMAGE}
+      type: Docker
+- apiVersion: v1
+  data:
+    mime.types: |2
+
+      types {
+          text/html                                        html htm shtml;
+          text/css                                         css;
+          text/xml                                         xml;
+          image/gif                                        gif;
+          image/jpeg                                       jpeg jpg;
+          application/javascript                           js;
+          application/atom+xml                             atom;
+          application/rss+xml                              rss;
+
+          text/mathml                                      mml;
+          text/plain                                       txt;
+          text/vnd.sun.j2me.app-descriptor                 jad;
+          text/vnd.wap.wml                                 wml;
+          text/x-component                                 htc;
+
+          image/png                                        png;
+          image/svg+xml                                    svg svgz;
+          image/tiff                                       tif tiff;
+          image/vnd.wap.wbmp                               wbmp;
+          image/webp                                       webp;
+          image/x-icon                                     ico;
+          image/x-jng                                      jng;
+          image/x-ms-bmp                                   bmp;
+
+          application/font-woff                            woff;
+          application/java-archive                         jar war ear;
+          application/json                                 json;
+          application/mac-binhex40                         hqx;
+          application/msword                               doc;
+          application/pdf                                  pdf;
+          application/postscript                           ps eps ai;
+          application/rtf                                  rtf;
+          application/vnd.apple.mpegurl                    m3u8;
+          application/vnd.google-earth.kml+xml             kml;
+          application/vnd.google-earth.kmz                 kmz;
+          application/vnd.ms-excel                         xls;
+          application/vnd.ms-fontobject                    eot;
+          application/vnd.ms-powerpoint                    ppt;
+          application/vnd.oasis.opendocument.graphics      odg;
+          application/vnd.oasis.opendocument.presentation  odp;
+          application/vnd.oasis.opendocument.spreadsheet   ods;
+          application/vnd.oasis.opendocument.text          odt;
+          application/vnd.openxmlformats-officedocument.presentationml.presentation
+                                                          pptx;
+          application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+                                                          xlsx;
+          application/vnd.openxmlformats-officedocument.wordprocessingml.document
+                                                          docx;
+          application/vnd.wap.wmlc                         wmlc;
+          application/x-7z-compressed                      7z;
+          application/x-cocoa                              cco;
+          application/x-java-archive-diff                  jardiff;
+          application/x-java-jnlp-file                     jnlp;
+          application/x-makeself                           run;
+          application/x-perl                               pl pm;
+          application/x-pilot                              prc pdb;
+          application/x-rar-compressed                     rar;
+          application/x-redhat-package-manager             rpm;
+          application/x-sea                                sea;
+          application/x-shockwave-flash                    swf;
+          application/x-stuffit                            sit;
+          application/x-tcl                                tcl tk;
+          application/x-x509-ca-cert                       der pem crt;
+          application/x-xpinstall                          xpi;
+          application/xhtml+xml                            xhtml;
+          application/xspf+xml                             xspf;
+          application/zip                                  zip;
+
+          application/octet-stream                         bin exe dll;
+          application/octet-stream                         deb;
+          application/octet-stream                         dmg;
+          application/octet-stream                         iso img;
+          application/octet-stream                         msi msp msm;
+
+          audio/midi                                       mid midi kar;
+          audio/mpeg                                       mp3;
+          audio/ogg                                        ogg;
+          audio/x-m4a                                      m4a;
+          audio/x-realaudio                                ra;
+
+          video/3gpp                                       3gpp 3gp;
+          video/mp2t                                       ts;
+          video/mp4                                        mp4;
+          video/mpeg                                       mpeg mpg;
+          video/quicktime                                  mov;
+          video/webm                                       webm;
+          video/x-flv                                      flv;
+          video/x-m4v                                      m4v;
+          video/x-mng                                      mng;
+          video/x-ms-asf                                   asx asf;
+          video/x-ms-wmv                                   wmv;
+          video/x-msvideo                                  avi;
+      }
+    nginx.conf: |-
+      worker_processes  1;
+
+      error_log  /var/log/nginx/error.log warn;
+      pid        /tmp/nginx.pid;
+
+
+      events {
+          worker_connections  1024;
+      }
+
+      http {
+          include       /etc/nginx/mime.types;
+          default_type  application/octet-stream;
+
+          log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                            '$status $body_bytes_sent "$http_referer" '
+                            '"$http_user_agent" "$http_x_forwarded_for"';
+
+          access_log  /var/log/nginx/access.log  main;
+
+          sendfile        on;
+          #tcp_nopush     on;
+
+          keepalive_timeout  65;
+
+          #gzip  on;
+
+
+          server {
+              listen 8080 default_server;
+
+              root /var/www/html;
+
+              server_name _;
+
+              index index.html index.htm index.php;
+
+              location / {
+                  try_files $uri $uri/ =404;
+              }
+
+              location ~ \.php$ {
+                  fastcgi_pass localhost:9000;
+                  fastcgi_split_path_info ^(.+\.php)(/.+)$;
+                  fastcgi_index index.php;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  fastcgi_param  QUERY_STRING       $query_string;
+                  fastcgi_param  REQUEST_METHOD     $request_method;
+                  fastcgi_param  CONTENT_TYPE       $content_type;
+                  fastcgi_param  CONTENT_LENGTH     $content_length;
+                  fastcgi_param  SCRIPT_NAME        $fastcgi_script_name;
+                  fastcgi_param  REQUEST_URI        $request_uri;
+                  fastcgi_param  DOCUMENT_URI       $document_uri;
+                  fastcgi_param  DOCUMENT_ROOT      $document_root;
+                  fastcgi_param  SERVER_PROTOCOL    $server_protocol;
+                  fastcgi_param  REQUEST_SCHEME     $scheme;
+                  fastcgi_param  HTTPS              $https if_not_empty;
+                  fastcgi_param  GATEWAY_INTERFACE  CGI/1.1;
+                  fastcgi_param  SERVER_SOFTWARE    nginx/$nginx_version;
+                  fastcgi_param  REMOTE_ADDR        $remote_addr;
+                  fastcgi_param  REMOTE_PORT        $remote_port;
+                  fastcgi_param  SERVER_ADDR        $server_addr;
+                  fastcgi_param  SERVER_PORT        $server_port;
+                  fastcgi_param  SERVER_NAME        $server_name;
+                  fastcgi_param  REDIRECT_STATUS    200;
+              }
+
+          }
+
+      }
+  kind: ConfigMap
+  metadata:
+    name: ${APP_NAME}-nginx-config
+    labels:
+      app: ${APP_NAME}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}
+    labels:
+      app: ${APP_NAME}
+  spec:
+    ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      name: ${APP_NAME}
+    type: ClusterIP
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: ${APP_NAME}-webroot
+    labels:
+      app: ${APP_NAME}
+  spec:
+    accessModes:
+    - ReadWriteMany
+    resources:
+      requests:
+        storage: ${WEBROOT_SIZE}
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    labels:
+      app: ${APP_NAME}
+      build: ${APP_NAME}-php-fpm
+    name: ${APP_NAME}-php-fpm
