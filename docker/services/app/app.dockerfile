@@ -2,6 +2,8 @@ FROM php:8.2-fpm
 
 WORKDIR /var/www
 
+USER root
+
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
